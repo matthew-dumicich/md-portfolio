@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { motion } from "framer-motion";
+import { motion, cubicBezier } from "framer-motion";
 
 function Starfield({ density = 0.00018 }: { density?: number }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -81,9 +81,16 @@ function useSmoothScroll() {
   }, []);
 }
 
+const easeFn = cubicBezier(0.16, 1, 0.3, 1);
+
 const sectionVariant = {
   hidden: { opacity: 0, y: 80, scale: 0.98 },
-  show: { opacity: 1, y: 0, scale: 1, transition: { duration: 1, ease: [0.16, 1, 0.3, 1] } },
+  show: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: { duration: 1, ease: easeFn },
+  },
 };
 
 export default function Portfolio() {
