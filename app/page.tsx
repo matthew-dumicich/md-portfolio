@@ -1,39 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { motion, cubicBezier } from "framer-motion";
 
-/**
- * STARFIELD – Fixed timestep + visibility-safe
- * - Uses time-based animation (dt in seconds) so 60/90/120Hz all look the same
- * - Pauses when the tab/page is hidden (mobile pull-to-refresh / app switch)
- * - Ensures only ONE RAF loop is active at a time
- * - Respects prefers-reduced-motion
- */
+/** STARFIELD – fixed timestep + visibility safe */
 function Starfield({ density = 0.00018 }: { density?: number }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rafRef = useRef<number | null>(null);
-  const runningRef = useRef(false);
-  const starsRef = useRef<{ x: number; y: number; r: number; tw: number }[]>([]);
-
-  const init = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const { innerWidth: w, innerHeight: h } = window;
-    canvas.width = Math.floor(w * dpr);
-    canvas.height = Math.floor(h * dpr);
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    const count = Math.floor(w * h * density);
-    const rand = (n = 1) => Math.random() * n;
-    starsRef.current = Array.from({ length: count }, () => ({
-      x: rand(canvas.width),
-      y: rand(canvas.height),
-      r: Math.max(0.4, Math.random() * 1.6) * dpr,
-      tw: 0.5 + Math.random() * 1.2, // twinkle speed factor
-    }));
-  };
+  const runningRef = useRef<boolean>(false);
+  const starsRef = useRef<Array<{ x: number; y: number; r: number; tw: number }>>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -41,19 +16,34 @@ function Starfield({ density = 0.00018 }: { density?: number }) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const mediaReduce = window.matchMedia?.("(prefers-reduced-motion: reduce)");
-    const reduced = mediaReduce?.matches;
+    const init = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const { innerWidth: w, innerHeight: h } = window;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      const count = Math.floor(w * h * density);
+      const rand = (n = 1) => Math.random() * n;
+      starsRef.current = Array.from({ length: count }, () => ({
+        x: rand(canvas.width),
+        y: rand(canvas.height),
+        r: Math.max(0.4, Math.random() * 1.6) * dpr,
+        tw: 0.5 + Math.random() * 1.2,
+      }));
+    };
 
-    init();
+    const mediaReduce: MediaQueryList | null =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-reduced-motion: reduce)")
+        : null;
 
     let t = 0; // seconds
     let last = performance.now();
 
     const draw = () => {
-      if (!canvas) return; // TS calm
       const now = performance.now();
-      // dt in seconds, clamp to avoid big jumps after tab restore
-      const dt = Math.min((now - last) / 1000, 0.033); // cap ~33ms (30fps max step)
+      const dt = Math.min((now - last) / 1000, 0.033); // clamp ~33ms
       last = now;
       t += dt;
 
@@ -63,7 +53,6 @@ function Starfield({ density = 0.00018 }: { density?: number }) {
 
       for (let i = 0; i < stars.length; i++) {
         const s = stars[i];
-        // time-based twinkle (tw is a factor)
         const alpha = 0.35 + 0.65 * Math.abs(Math.sin((t * s.tw + i * 0.15) * 0.9));
         ctx.beginPath();
         ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
@@ -71,9 +60,8 @@ function Starfield({ density = 0.00018 }: { density?: number }) {
         ctx.fill();
       }
 
-      if (!reduced) {
-        // time-based drift so high-refresh displays don't speed it up
-        const dx = 6 * dt; // px/sec scaled by dt (small subtle drift)
+      if (!mediaReduce?.matches) {
+        const dx = 6 * dt; // px/sec
         const dy = 5 * dt;
         for (let i = 0; i < stars.length; i++) {
           const s = stars[i];
@@ -90,7 +78,7 @@ function Starfield({ density = 0.00018 }: { density?: number }) {
     const start = () => {
       if (runningRef.current) return;
       runningRef.current = true;
-      last = performance.now(); // reset timing baseline
+      last = performance.now();
       rafRef.current = requestAnimationFrame(draw);
     };
     const stop = () => {
@@ -99,44 +87,51 @@ function Starfield({ density = 0.00018 }: { density?: number }) {
       rafRef.current = null;
     };
 
-    // Handle resize (including iOS pull-to-refresh layout changes)
     const onResize = () => {
       stop();
       init();
       start();
     };
 
-    // Pause when page is not visible to avoid timing jumps
     const onVisibility = () => {
       if (document.visibilityState === "hidden") {
         stop();
       } else {
-        // Re-init baseline time to avoid big dt after returning
         last = performance.now();
         start();
       }
     };
 
-    // iOS Safari fires pagehide/pageshow during pull-to-refresh; pause/resume safely
     const onPageHide = () => stop();
     const onPageShow = () => {
       init();
       start();
     };
 
-    // Media query change (user toggles reduced motion)
-    const onReduceChange = () => {
-      // No special handling needed beyond restart to apply motion state
+    const onReduceChange = (e: MediaQueryListEvent) => {
+      // restart to apply reduced/normal motion immediately
+      void e; // explicitly use param to appease no-unused-vars in some configs
       stop();
       start();
     };
 
+    // init & run
+    init();
     start();
+
+    // listeners
     window.addEventListener("resize", onResize);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("pageshow", onPageShow);
-    mediaReduce?.addEventListener?.("change", onReduceChange as any);
+    if (mediaReduce) {
+      // handle both modern and legacy Safari APIs without any
+      if (typeof mediaReduce.addEventListener === "function") {
+        mediaReduce.addEventListener("change", onReduceChange);
+      } else if (typeof (mediaReduce as { addListener?: (cb: (ev: MediaQueryListEvent) => void) => void }).addListener === "function") {
+        (mediaReduce as { addListener: (cb: (ev: MediaQueryListEvent) => void) => void }).addListener(onReduceChange);
+      }
+    }
 
     return () => {
       stop();
@@ -144,7 +139,13 @@ function Starfield({ density = 0.00018 }: { density?: number }) {
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("pageshow", onPageShow);
-      mediaReduce?.removeEventListener?.("change", onReduceChange as any);
+      if (mediaReduce) {
+        if (typeof mediaReduce.removeEventListener === "function") {
+          mediaReduce.removeEventListener("change", onReduceChange);
+        } else if (typeof (mediaReduce as { removeListener?: (cb: (ev: MediaQueryListEvent) => void) => void }).removeListener === "function") {
+          (mediaReduce as { removeListener: (cb: (ev: MediaQueryListEvent) => void) => void }).removeListener(onReduceChange);
+        }
+      }
     };
   }, [density]);
 
@@ -179,16 +180,14 @@ const sectionVariant = {
   },
 };
 
-export default function Portfolio() {
+export default function Page() {
   const headerRef = useRef<HTMLElement | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const [headerH, setHeaderH] = useState(64);
 
   // Measure header and apply padding + scroll-padding
   useEffect(() => {
     const update = () => {
       const h = headerRef.current?.offsetHeight ?? 64;
-      setHeaderH(h);
       const el = scrollerRef.current;
       if (el) {
         el.style.scrollPaddingTop = `${h}px`;
@@ -272,10 +271,7 @@ export default function Portfolio() {
             <div className="relative">
               <ul
                 className="grid gap-3 md:gap-4 md:grid-cols-2 pr-1 overflow-y-auto rounded-2xl"
-                style={{
-                  maxHeight: "min(70vh, calc(100svh - 12rem))",
-                  WebkitOverflowScrolling: "touch",
-                }}
+                style={{ maxHeight: "min(70vh, calc(100svh - 12rem))", WebkitOverflowScrolling: "touch" as const }}
               >
                 {[
                   { title: "Face Verification & Anti-spoofing", desc: "TensorFlow + metric learning; anti-spoofing detection; production-ready API.", href: "#" },
