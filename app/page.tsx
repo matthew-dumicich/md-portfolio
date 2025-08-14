@@ -1,65 +1,152 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, cubicBezier } from "framer-motion";
 
+/**
+ * STARFIELD – Fixed timestep + visibility-safe
+ * - Uses time-based animation (dt in seconds) so 60/90/120Hz all look the same
+ * - Pauses when the tab/page is hidden (mobile pull-to-refresh / app switch)
+ * - Ensures only ONE RAF loop is active at a time
+ * - Respects prefers-reduced-motion
+ */
 function Starfield({ density = 0.00018 }: { density?: number }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animationRef = useRef<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const runningRef = useRef(false);
   const starsRef = useRef<{ x: number; y: number; r: number; tw: number }[]>([]);
 
-  const resize = () => {
-    const canvas = canvasRef.current!;
+  const init = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const { innerWidth: w, innerHeight: h } = window;
     canvas.width = Math.floor(w * dpr);
     canvas.height = Math.floor(h * dpr);
-    canvas.style.width = w + "px";
-    canvas.style.height = h + "px";
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
     const count = Math.floor(w * h * density);
     const rand = (n = 1) => Math.random() * n;
     starsRef.current = Array.from({ length: count }, () => ({
       x: rand(canvas.width),
       y: rand(canvas.height),
       r: Math.max(0.4, Math.random() * 1.6) * dpr,
-      tw: 0.5 + Math.random() * 1.2,
+      tw: 0.5 + Math.random() * 1.2, // twinkle speed factor
     }));
   };
 
   useEffect(() => {
-    const canvas = canvasRef.current!;
-    const ctx = canvas.getContext("2d")!;
-    let t = 0;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const mediaReduce = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const reduced = mediaReduce?.matches;
+
+    init();
+
+    let t = 0; // seconds
+    let last = performance.now();
+
     const draw = () => {
+      if (!canvas) return; // TS calm
+      const now = performance.now();
+      // dt in seconds, clamp to avoid big jumps after tab restore
+      const dt = Math.min((now - last) / 1000, 0.033); // cap ~33ms (30fps max step)
+      last = now;
+      t += dt;
+
       const stars = starsRef.current;
       const { width: W, height: H } = canvas;
       ctx.clearRect(0, 0, W, H);
+
       for (let i = 0; i < stars.length; i++) {
         const s = stars[i];
-        const alpha = 0.35 + 0.65 * Math.abs(Math.sin((t * s.tw + i) * 0.003));
+        // time-based twinkle (tw is a factor)
+        const alpha = 0.35 + 0.65 * Math.abs(Math.sin((t * s.tw + i * 0.15) * 0.9));
         ctx.beginPath();
         ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(245, 245, 240, ${alpha.toFixed(3)})`;
         ctx.fill();
       }
-      for (let i = 0; i < stars.length; i++) {
-        const s = stars[i];
-        s.x += 0.005 * (i % 3 === 0 ? 1 : -1);
-        s.y += 0.004 * (i % 2 === 0 ? 1 : -1);
-        if (s.x < 0) s.x += W; if (s.x > W) s.x -= W;
-        if (s.y < 0) s.y += H; if (s.y > H) s.y -= H;
+
+      if (!reduced) {
+        // time-based drift so high-refresh displays don't speed it up
+        const dx = 6 * dt; // px/sec scaled by dt (small subtle drift)
+        const dy = 5 * dt;
+        for (let i = 0; i < stars.length; i++) {
+          const s = stars[i];
+          s.x += dx * (i % 3 === 0 ? 1 : -1);
+          s.y += dy * (i % 2 === 0 ? 1 : -1);
+          if (s.x < 0) s.x += W; if (s.x > W) s.x -= W;
+          if (s.y < 0) s.y += H; if (s.y > H) s.y -= H;
+        }
       }
-      t += 1;
-      animationRef.current = requestAnimationFrame(draw);
+
+      rafRef.current = requestAnimationFrame(draw);
     };
-    resize();
-    draw();
-    window.addEventListener("resize", resize);
+
+    const start = () => {
+      if (runningRef.current) return;
+      runningRef.current = true;
+      last = performance.now(); // reset timing baseline
+      rafRef.current = requestAnimationFrame(draw);
+    };
+    const stop = () => {
+      runningRef.current = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+
+    // Handle resize (including iOS pull-to-refresh layout changes)
+    const onResize = () => {
+      stop();
+      init();
+      start();
+    };
+
+    // Pause when page is not visible to avoid timing jumps
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        stop();
+      } else {
+        // Re-init baseline time to avoid big dt after returning
+        last = performance.now();
+        start();
+      }
+    };
+
+    // iOS Safari fires pagehide/pageshow during pull-to-refresh; pause/resume safely
+    const onPageHide = () => stop();
+    const onPageShow = () => {
+      init();
+      start();
+    };
+
+    // Media query change (user toggles reduced motion)
+    const onReduceChange = () => {
+      // No special handling needed beyond restart to apply motion state
+      stop();
+      start();
+    };
+
+    start();
+    window.addEventListener("resize", onResize);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("pageshow", onPageShow);
+    mediaReduce?.addEventListener?.("change", onReduceChange as any);
+
     return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-      window.removeEventListener("resize", resize);
+      stop();
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("pageshow", onPageShow);
+      mediaReduce?.removeEventListener?.("change", onReduceChange as any);
     };
-  }, []);
+  }, [density]);
 
   return <canvas ref={canvasRef} aria-hidden className="fixed inset-0 z-0 block" />;
 }
@@ -73,7 +160,7 @@ function useSmoothScroll() {
       const el = id ? document.getElementById(id) : null;
       if (el) {
         e.preventDefault();
-        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
     };
     links.forEach((a) => a.addEventListener("click", onClick));
@@ -84,17 +171,44 @@ function useSmoothScroll() {
 const easeFn = cubicBezier(0.16, 1, 0.3, 1);
 
 const sectionVariant = {
-  hidden: { opacity: 0, y: 80, scale: 0.98 },
+  hidden: { opacity: 0, y: 50 },
   show: {
     opacity: 1,
     y: 0,
-    scale: 1,
-    transition: { duration: 1, ease: easeFn },
+    transition: { duration: 0.8, ease: easeFn },
   },
 };
 
 export default function Portfolio() {
+  const headerRef = useRef<HTMLElement | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [headerH, setHeaderH] = useState(64);
+
+  // Measure header and apply padding + scroll-padding
+  useEffect(() => {
+    const update = () => {
+      const h = headerRef.current?.offsetHeight ?? 64;
+      setHeaderH(h);
+      const el = scrollerRef.current;
+      if (el) {
+        el.style.scrollPaddingTop = `${h}px`;
+        el.style.scrollPaddingBottom = `${h}px`;
+        el.style.paddingTop = `${h}px`;
+        el.style.paddingBottom = `${h}px`;
+      }
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    if (headerRef.current) ro.observe(headerRef.current);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+
   useSmoothScroll();
+
   const navItems = useMemo(() => [
     { id: "home", label: "Home" },
     { id: "about", label: "About" },
@@ -105,7 +219,8 @@ export default function Portfolio() {
   return (
     <main className="relative min-h-screen w-full bg-gradient-to-b from-[#0a0c10] to-[#0b0d10] text-[#f5f5f0] antialiased">
       <Starfield />
-      <header className="sticky top-0 z-20 border-b border-white/10 bg-black/20 backdrop-blur">
+
+      <header ref={headerRef} className="sticky top-0 z-20 border-b border-white/10 bg-black/20 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4">
           <a href="#home" className="font-medium tracking-tight text-[#f5f5f0]">md.</a>
           <nav className="flex gap-5 text-sm">
@@ -115,8 +230,10 @@ export default function Portfolio() {
           </nav>
         </div>
       </header>
-      <div id="snapper" className="relative z-10 h-[100svh] overflow-y-auto snap-y snap-mandatory">
-        <motion.section id="home" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.35 }} className="snap-start [scroll-snap-stop:always] min-h-[100svh] grid place-items-center px-5">
+
+      <div id="snapper" ref={scrollerRef} className="relative z-10 h-[100svh] overflow-y-auto snap-y snap-mandatory">
+        {/* HOME */}
+        <motion.section id="home" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.4 }} className="snap-center [scroll-snap-stop:always] min-h-[100svh] grid place-items-center px-5">
           <div className="mx-auto w-full max-w-5xl">
             <h1 className="mb-4 text-4xl font-semibold md:text-6xl">Matthew Dumicich</h1>
             <p className="max-w-xl text-base text-[#dcdcd4] md:text-lg">AI-focused software engineer & final-year Computer Science (AI) student in Melbourne. I build tidy, reliable interfaces for messy, real-world data problems.</p>
@@ -126,8 +243,10 @@ export default function Portfolio() {
             </div>
           </div>
         </motion.section>
-        <motion.section id="about" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.35 }} className="snap-start [scroll-snap-stop:always] min-h-[100svh] grid place-items-center px-5">
-          <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-10 md:grid-cols-12">
+
+        {/* ABOUT */}
+        <motion.section id="about" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.4 }} className="snap-center [scroll-snap-stop:always] min-h-[100svh] grid place-items-center px-5">
+          <div className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-8 md:grid-cols-12">
             <div className="md:col-span-7">
               <h2 className="mb-4 text-2xl font-semibold">About</h2>
               <p className="max-w-prose text-[#dcdcd4]">I enjoy taking ambiguous data problems and turning them into simple, robust products. Recently that’s meant building face-embedding systems with metric learning, tightening anti-spoofing, and shipping small, useful apps that help people get answers quickly.</p>
@@ -145,28 +264,48 @@ export default function Portfolio() {
             </div>
           </div>
         </motion.section>
-        <motion.section id="work" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.35 }} className="snap-start [scroll-snap-stop:always] min-h-[100svh] grid place-items-center px-5">
+
+        {/* WORK (mobile overflow-safe) */}
+        <motion.section id="work" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.4 }} className="snap-center [scroll-snap-stop:always] min-h-[100svh] grid place-items-center px-5">
           <div className="mx-auto w-full max-w-5xl">
-            <h2 className="mb-8 text-2xl font-semibold">Selected Work</h2>
-            <ul className="grid gap-4 md:grid-cols-2">
-              {[
-                { title: "Face Verification & Anti-spoofing", desc: "TensorFlow + metric learning; anti-spoofing detection; production-ready API.", href: "#" },
-                { title: "Anomaly Detection for Healthcare Access", desc: "Event pipelines, embeddings, and visual audit tools.", href: "#" },
-                { title: "Testy — MCQ Generator for Teachers", desc: "Next.js + Firebase + GPT; generates curriculum-aligned MCQs.", href: "#" },
-                { title: "Animal Classifier", desc: "Compact CNN for mobile with explainability tools.", href: "#" },
-              ].map((p, i) => (
-                <motion.li key={p.title} variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.3 }} className="group rounded-2xl border border-white/10 p-5 transition hover:bg-white/[0.04]">
-                  <a href={p.href} className="block">
-                    <div className="mb-1 text-sm uppercase tracking-wide text-[#b6b6ad]">Project {String(i + 1).padStart(2, "0")}</div>
-                    <h3 className="text-lg font-medium">{p.title}</h3>
-                    <p className="mt-2 text-sm text-[#d0d0c8]">{p.desc}</p>
-                  </a>
-                </motion.li>
-              ))}
-            </ul>
+            <h2 className="mb-4 md:mb-6 text-2xl font-semibold">Selected Work</h2>
+            <div className="relative">
+              <ul
+                className="grid gap-3 md:gap-4 md:grid-cols-2 pr-1 overflow-y-auto rounded-2xl"
+                style={{
+                  maxHeight: "min(70vh, calc(100svh - 12rem))",
+                  WebkitOverflowScrolling: "touch",
+                }}
+              >
+                {[
+                  { title: "Face Verification & Anti-spoofing", desc: "TensorFlow + metric learning; anti-spoofing detection; production-ready API.", href: "#" },
+                  { title: "Anomaly Detection for Healthcare Access", desc: "Event pipelines, embeddings, and visual audit tools.", href: "#" },
+                  { title: "Testy — MCQ Generator for Teachers", desc: "Next.js + Firebase + GPT; generates curriculum-aligned MCQs.", href: "#" },
+                  { title: "Animal Classifier", desc: "Compact CNN for mobile with explainability tools.", href: "#" },
+                ].map((p, i) => (
+                  <motion.li
+                    key={p.title}
+                    variants={sectionVariant}
+                    initial="hidden"
+                    whileInView="show"
+                    viewport={{ once: true, amount: 0.2 }}
+                    className="group rounded-2xl border border-white/10 p-5 transition hover:bg-white/[0.04]"
+                  >
+                    <a href={p.href} className="block">
+                      <div className="mb-1 text-sm uppercase tracking-wide text-[#b6b6ad]">Project {String(i + 1).padStart(2, "0")}</div>
+                      <h3 className="text-lg font-medium">{p.title}</h3>
+                      <p className="mt-2 text-sm text-[#d0d0c8]">{p.desc}</p>
+                    </a>
+                  </motion.li>
+                ))}
+              </ul>
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[#0b0d10] to-transparent md:hidden" />
+            </div>
           </div>
         </motion.section>
-        <motion.section id="contact" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.35 }} className="snap-start [scroll-snap-stop:always] min-h-[100svh] grid grid-rows-[1fr_auto] px-5">
+
+        {/* CONTACT */}
+        <motion.section id="contact" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.4 }} className="snap-center [scroll-snap-stop:always] min-h-[100svh] grid grid-rows-[1fr_auto] px-5">
           <div className="mx-auto w-full max-w-5xl self-center">
             <h2 className="mb-4 text-2xl font-semibold">Contact</h2>
             <p className="max-w-2xl text-[#dcdcd4]">Available for internships, graduate roles, and collaborations.</p>
