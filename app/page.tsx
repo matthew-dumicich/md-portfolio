@@ -2,156 +2,10 @@
 
 import { useEffect, useMemo, useRef } from "react";
 import { motion, cubicBezier } from "framer-motion";
+import Starfield from "../components/Starfield";
+import { projects } from "./work/projects";
 
-/** STARFIELD – fixed timestep + visibility safe */
-function Starfield({ density = 0.00018 }: { density?: number }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const runningRef = useRef<boolean>(false);
-  const starsRef = useRef<Array<{ x: number; y: number; r: number; tw: number }>>([]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const init = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const { innerWidth: w, innerHeight: h } = window;
-      canvas.width = Math.floor(w * dpr);
-      canvas.height = Math.floor(h * dpr);
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${h}px`;
-      const count = Math.floor(w * h * density);
-      const rand = (n = 1) => Math.random() * n;
-      starsRef.current = Array.from({ length: count }, () => ({
-        x: rand(canvas.width),
-        y: rand(canvas.height),
-        r: Math.max(0.4, Math.random() * 1.6) * dpr,
-        tw: 0.5 + Math.random() * 1.2,
-      }));
-    };
-
-    const mediaReduce: MediaQueryList | null =
-      typeof window.matchMedia === "function"
-        ? window.matchMedia("(prefers-reduced-motion: reduce)")
-        : null;
-
-    let t = 0; // seconds
-    let last = performance.now();
-
-    const draw = () => {
-      const now = performance.now();
-      const dt = Math.min((now - last) / 1000, 0.033); // clamp ~33ms
-      last = now;
-      t += dt;
-
-      const stars = starsRef.current;
-      const { width: W, height: H } = canvas;
-      ctx.clearRect(0, 0, W, H);
-
-      for (let i = 0; i < stars.length; i++) {
-        const s = stars[i];
-        const alpha = 0.35 + 0.65 * Math.abs(Math.sin((t * s.tw + i * 0.15) * 0.9));
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(245, 245, 240, ${alpha.toFixed(3)})`;
-        ctx.fill();
-      }
-
-      if (!mediaReduce?.matches) {
-        const dx = 6 * dt; // px/sec
-        const dy = 5 * dt;
-        for (let i = 0; i < stars.length; i++) {
-          const s = stars[i];
-          s.x += dx * (i % 3 === 0 ? 1 : -1);
-          s.y += dy * (i % 2 === 0 ? 1 : -1);
-          if (s.x < 0) s.x += W; if (s.x > W) s.x -= W;
-          if (s.y < 0) s.y += H; if (s.y > H) s.y -= H;
-        }
-      }
-
-      rafRef.current = requestAnimationFrame(draw);
-    };
-
-    const start = () => {
-      if (runningRef.current) return;
-      runningRef.current = true;
-      last = performance.now();
-      rafRef.current = requestAnimationFrame(draw);
-    };
-    const stop = () => {
-      runningRef.current = false;
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    };
-
-    const onResize = () => {
-      stop();
-      init();
-      start();
-    };
-
-    const onVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        stop();
-      } else {
-        last = performance.now();
-        start();
-      }
-    };
-
-    const onPageHide = () => stop();
-    const onPageShow = () => {
-      init();
-      start();
-    };
-
-    const onReduceChange = (e: MediaQueryListEvent) => {
-      // restart to apply reduced/normal motion immediately
-      void e; // explicitly use param to appease no-unused-vars in some configs
-      stop();
-      start();
-    };
-
-    // init & run
-    init();
-    start();
-
-    // listeners
-    window.addEventListener("resize", onResize);
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("pagehide", onPageHide);
-    window.addEventListener("pageshow", onPageShow);
-    if (mediaReduce) {
-      // handle both modern and legacy Safari APIs without any
-      if (typeof mediaReduce.addEventListener === "function") {
-        mediaReduce.addEventListener("change", onReduceChange);
-      } else if (typeof (mediaReduce as { addListener?: (cb: (ev: MediaQueryListEvent) => void) => void }).addListener === "function") {
-        (mediaReduce as { addListener: (cb: (ev: MediaQueryListEvent) => void) => void }).addListener(onReduceChange);
-      }
-    }
-
-    return () => {
-      stop();
-      window.removeEventListener("resize", onResize);
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("pagehide", onPageHide);
-      window.removeEventListener("pageshow", onPageShow);
-      if (mediaReduce) {
-        if (typeof mediaReduce.removeEventListener === "function") {
-          mediaReduce.removeEventListener("change", onReduceChange);
-        } else if (typeof (mediaReduce as { removeListener?: (cb: (ev: MediaQueryListEvent) => void) => void }).removeListener === "function") {
-          (mediaReduce as { removeListener: (cb: (ev: MediaQueryListEvent) => void) => void }).removeListener(onReduceChange);
-        }
-      }
-    };
-  }, [density]);
-
-  return <canvas ref={canvasRef} aria-hidden className="fixed inset-0 z-0 block" />;
-}
-
+/* smooth scrolling for hash links */
 function useSmoothScroll() {
   useEffect(() => {
     const links = document.querySelectorAll<HTMLAnchorElement>('a[href^="#"]');
@@ -173,11 +27,7 @@ const easeFn = cubicBezier(0.16, 1, 0.3, 1);
 
 const sectionVariant = {
   hidden: { opacity: 0, y: 50 },
-  show: {
-    opacity: 1,
-    y: 0,
-    transition: { duration: 0.8, ease: easeFn },
-  },
+  show: { opacity: 1, y: 0, transition: { duration: 0.8, ease: easeFn } },
 };
 
 export default function Page() {
@@ -200,10 +50,7 @@ export default function Page() {
     const ro = new ResizeObserver(update);
     if (headerRef.current) ro.observe(headerRef.current);
     window.addEventListener("resize", update);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", update);
-    };
+    return () => { ro.disconnect(); window.removeEventListener("resize", update); };
   }, []);
 
   useSmoothScroll();
@@ -264,7 +111,7 @@ export default function Page() {
           </div>
         </motion.section>
 
-        {/* WORK (mobile overflow-safe) */}
+        {/* WORK */}
         <motion.section id="work" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.4 }} className="snap-center [scroll-snap-stop:always] min-h-[100svh] grid place-items-center px-5">
           <div className="mx-auto w-full max-w-5xl">
             <h2 className="mb-4 md:mb-6 text-2xl font-semibold">Selected Work</h2>
@@ -273,22 +120,19 @@ export default function Page() {
                 className="grid gap-3 md:gap-4 md:grid-cols-2 pr-1 overflow-y-auto rounded-2xl"
                 style={{ maxHeight: "min(70vh, calc(100svh - 12rem))", WebkitOverflowScrolling: "touch" as const }}
               >
-                {[
-                  { title: "Face Verification & Anti-spoofing", desc: "TensorFlow + metric learning; anti-spoofing detection; production-ready API.", href: "#" },
-                  { title: "Anomaly Detection for Healthcare Access", desc: "Event pipelines, embeddings, and visual audit tools.", href: "#" },
-                  { title: "Testy — MCQ Generator for Teachers", desc: "Next.js + Firebase + GPT; generates curriculum-aligned MCQs.", href: "#" },
-                  { title: "Animal Classifier", desc: "Compact CNN for mobile with explainability tools.", href: "#" },
-                ].map((p, i) => (
+                {projects.map((p, i) => (
                   <motion.li
-                    key={p.title}
+                    key={p.slug}
                     variants={sectionVariant}
                     initial="hidden"
                     whileInView="show"
                     viewport={{ once: true, amount: 0.2 }}
                     className="group rounded-2xl border border-white/10 p-5 transition hover:bg-white/[0.04]"
                   >
-                    <a href={p.href} className="block">
-                      <div className="mb-1 text-sm uppercase tracking-wide text-[#b6b6ad]">Project {String(i + 1).padStart(2, "0")}</div>
+                    <a href={`/work/${p.slug}`} className="block">
+                      <div className="mb-1 text-sm uppercase tracking-wide text-[#b6b6ad]">
+                        Project {String(i + 1).padStart(2, "0")}
+                      </div>
                       <h3 className="text-lg font-medium">{p.title}</h3>
                       <p className="mt-2 text-sm text-[#d0d0c8]">{p.desc}</p>
                     </a>
@@ -304,7 +148,7 @@ export default function Page() {
         <motion.section id="contact" variants={sectionVariant} initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.4 }} className="snap-center [scroll-snap-stop:always] min-h-[100svh] grid grid-rows-[1fr_auto] px-5">
           <div className="mx-auto w-full max-w-5xl self-center">
             <h2 className="mb-4 text-2xl font-semibold">Contact</h2>
-            <p className="max-w-2xl text-[#dcdcd4]">Available for internships, graduate roles, and collaborations.</p>
+            <p className="max-w-2xl text-[#dcdcd4]">Available for full-time roles, graduate roles, and collaborations.</p>
             <div className="mt-6 flex flex-wrap gap-3 text-sm">
               <a href="mailto:mdumicich@gmail.com" className="rounded-2xl border border-[#f5f5f0]/20 px-4 py-2 transition hover:bg-white/5">Email</a>
               <a href="https://www.linkedin.com/in/matthew-dumicich" className="rounded-2xl border border-[#f5f5f0]/20 px-4 py-2 transition hover:bg-white/5">LinkedIn</a>
