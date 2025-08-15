@@ -1,11 +1,10 @@
+// app/work/[slug]/page.tsx
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { projects } from "../projects";
 import Starfield from "../../../components/Starfield";
 
-// Allow both {slug:string} or Promise<{slug:string}>
-type Awaitable<T> = T | Promise<T>;
 type Params = { slug: string };
 
 export async function generateStaticParams() {
@@ -13,9 +12,9 @@ export async function generateStaticParams() {
 }
 
 export async function generateMetadata(
-  { params }: { params: Awaitable<Params> } // ✅ accepts Promise or plain
+  { params }: { params: Promise<Params> } // ← must be Promise
 ): Promise<Metadata> {
-  const { slug } = await params;            // ✅ always await
+  const { slug } = await params;           // ← await before use
   const p = projects.find((x) => x.slug === slug);
   if (!p) return {};
   return {
@@ -25,16 +24,15 @@ export async function generateMetadata(
 }
 
 export default async function ProjectPage(
-  { params }: { params: Awaitable<Params> } // ✅ accepts Promise or plain
+  { params }: { params: Promise<Params> }  // ← must be Promise
 ) {
-  const { slug } = await params;            // ✅ always await
+  const { slug } = await params;           // ← await before use
   const p = projects.find((x) => x.slug === slug);
   if (!p) notFound();
 
   return (
     <main className="relative min-h-screen w-full bg-gradient-to-b from-[#0a0c10] to-[#0b0d10] text-[#f5f5f0] antialiased">
       <Starfield />
-
       <header className="sticky top-0 z-20 border-b border-white/10 bg-black/20 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-4">
           <Link href="/" className="font-medium tracking-tight text-[#f5f5f0]">md.</Link>
